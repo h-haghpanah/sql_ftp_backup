@@ -12,6 +12,7 @@ import schedule
 import time
 import logging
 import traceback
+import gzip
 
 
 class SQLFTPBackup:
@@ -41,6 +42,10 @@ class SQLFTPBackup:
         self.BACKUP_TYPE = config("BACKUP_TYPE", default="daily")  # 'daily' or 'interval'
         self.FTP_UPLOAD_ENABLED = config("FTP_UPLOAD_ENABLED", cast=bool, default=False)
         self.log_file = LogFile()
+        self.compress_backup = config("COMPRESS_BACKUP", cast=bool, default=False)
+        self.keep_orginal_file = config("KEEP_ORGINAL_FILE", cast=bool, default=True)
+        self.keep_orginal_file_every_x_time_backup = config("KEEP_ORGINAL_FILE_EVERY_X_TIME_BACKUP", cast=int, default=1)
+        self.x_time_backup = 1
 
     def get_database_list(self):
         try:
@@ -67,7 +72,26 @@ class SQLFTPBackup:
 
             dump_command = f"mysqldump -u {self.MYSQL_USER} -p{self.MYSQL_PASSWORD} {database_name} > {backup_file}"
             subprocess.check_call(dump_command, shell=True)
-            return backup_file
+            if self.compress_backup:
+                compressed_file = f"{backup_file}.gz"
+                with open(backup_file, 'rb') as f_in:
+                    with gzip.open(compressed_file, 'wb') as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+                if self.keep_orginal_file:
+                    if self.keep_orginal_file_every_x_time_backup == 0:
+                        return [backup_file, compressed_file]
+                    else:
+                        if self.x_time_backup >= self.keep_orginal_file_every_x_time_backup:
+                            return [backup_file, compressed_file]
+                        else:
+                            os.remove(backup_file)
+                            return [compressed_file]
+                else:
+                    os.remove(backup_file)
+                    return [compressed_file]
+            else:
+                return [backup_file]
+
         except Exception as e:
             error = f"Backup failed for database {database_name}: {str(e)}"
             if self.EMAIL_NOTIFICATION_ENABLED:
@@ -199,16 +223,22 @@ class SQLFTPBackup:
             os.makedirs(backup_date_dir, exist_ok=True)
 
             databases = self.get_database_list()
+            databases = [databases[0]]
             for db in databases:
                 backup_file = self.backup_database(db, backup_date_dir)
                 if self.FTP_UPLOAD_ENABLED:
                     ftp_folder = date_str
-                    self.upload_to_ftp(backup_file, ftp_folder)
+                    for bak in backup_file:
+                        self.upload_to_ftp(bak, ftp_folder)
             if self.FTP_UPLOAD_ENABLED:
                 self.delete_old_ftp_backups()
             self.delete_old_local_backups()
             self.save_last_backup_time()
             self.log_file.info(f"Backup successfull at {full_date_str}")
+            if self.x_time_backup >= self.keep_orginal_file_every_x_time_backup:
+                self.x_time_backup = 1
+            else:
+                self.x_time_backup += 1
         except Exception as e:
             error = f"An error occurred: {str(e)}"
             if self.EMAIL_NOTIFICATION_ENABLED:
