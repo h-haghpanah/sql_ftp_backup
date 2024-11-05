@@ -223,7 +223,6 @@ class SQLFTPBackup:
             os.makedirs(backup_date_dir, exist_ok=True)
 
             databases = self.get_database_list()
-            databases = [databases[0]]
             for db in databases:
                 backup_file = self.backup_database(db, backup_date_dir)
                 if self.FTP_UPLOAD_ENABLED:
